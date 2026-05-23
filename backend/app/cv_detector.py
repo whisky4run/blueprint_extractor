@@ -66,6 +66,11 @@ def detect_candidate_regions(image_path: Path) -> list[BoundingBox]:
     return [bb for bb, ratio in _extract_grid(image_path) if ratio >= MIN_AREA_RATIO]
 
 
+def detect_all_cells(image_path: Path) -> list[BoundingBox]:
+    """面積フィルタなしで全セルを返す（連結拡張用）。"""
+    return [bb for bb, _ in _extract_grid(image_path)]
+
+
 def detect_small_cells(image_path: Path) -> list[BoundingBox]:
     """
     面積フィルタを通過しなかった小セル（タイトル行・区切り行）を返す。

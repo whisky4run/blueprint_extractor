@@ -1,5 +1,6 @@
 import re
 import zipfile
+import json
 from io import BytesIO
 from pathlib import Path
 
@@ -42,10 +43,23 @@ def extract_parts(page_images: list[Path], parts: list[DetectedPart], out_dir: P
     return out_paths
 
 
-def build_zip(png_paths: list[Path]) -> bytes:
+def build_zip(
+    png_paths: list[Path],
+    result_payload: dict | None = None,
+    extra_files: list[tuple[Path, str]] | None = None,
+) -> bytes:
     """Pack all PNG files into a ZIP archive and return as bytes."""
     buf = BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for path in png_paths:
             zf.write(path, arcname=path.name)
+        if extra_files:
+            for path, arcname in extra_files:
+                if path.exists() and path.is_file():
+                    zf.write(path, arcname=arcname)
+        if result_payload is not None:
+            zf.writestr(
+                "result.json",
+                json.dumps(result_payload, ensure_ascii=False, indent=2),
+            )
     return buf.getvalue()
