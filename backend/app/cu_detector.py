@@ -9,7 +9,7 @@ from PIL import Image
 
 from app.cv_detector import detect_all_cells
 from app.header_position import HeaderPosition
-from app.models import BoundingBox, DetectedPart
+from app.models import BoundingBox, DetectedPart, HeaderFieldItem
 from app.title_position import TitlePosition
 
 _SOURCE_PATTERN = re.compile(r"D\(([^)]+)\)")
@@ -152,6 +152,32 @@ def _field_to_string(field: object) -> str:
         if isinstance(v, str):
             return v.strip()
     return ""
+
+
+def _field_value_to_string(field: object) -> str:
+    if isinstance(field, str):
+        return field.strip()
+    if isinstance(field, (int, float)):
+        return str(field)
+    if isinstance(field, dict):
+        for key in (
+            "valueString",
+            "valueDate",
+            "valueTime",
+            "valuePhoneNumber",
+            "valueCountryRegion",
+            "valueSelectionMark",
+            "content",
+            "text",
+        ):
+            v = field.get(key)
+            if isinstance(v, str):
+                return v.strip()
+        for key in ("valueInteger", "valueNumber"):
+            v = field.get(key)
+            if isinstance(v, (int, float)):
+                return str(v)
+    return _field_to_string(field)
 
 
 def _field_to_int(field: object) -> int | None:
@@ -410,6 +436,76 @@ def _extract_rows(payload: dict) -> list[dict]:
     return rows
 
 
+def _extract_header_fields(payload: dict, page_images: list[Path]) -> tuple[list[HeaderFieldItem], dict[str, str]]:
+    result = payload.get("result", {})
+    contents = result.get("contents")
+    if not isinstance(contents, list):
+        return [], {}
+
+    page_size_map = _extract_page_size_map(payload)
+    items: list[HeaderFieldItem] = []
+    key_values: dict[str, str] = {}
+
+    for content in contents:
+        if not isinstance(content, dict):
+            continue
+        fields = content.get("fields")
+        if not isinstance(fields, dict):
+            continue
+
+        for key, field in fields.items():
+            if not isinstance(field, dict):
+                continue
+
+            value = _field_value_to_string(field)
+            if not value:
+                continue
+
+            source = _field_to_string(field.get("source")) or None
+            page_idx: int | None = None
+            bbox: BoundingBox | None = None
+
+            if source:
+                source_parsed = _parse_source(source)
+                if source_parsed:
+                    page_num = source_parsed[0]
+                    parsed_page_idx = page_num - 1
+                    if 0 <= parsed_page_idx < len(page_images):
+                        with Image.open(page_images[parsed_page_idx]) as page_img:
+                            page_w_px, page_h_px = page_img.width, page_img.height
+
+                        source_page_w = None
+                        source_page_h = None
+                        dims = page_size_map.get(page_num)
+                        if dims:
+                            source_page_w, source_page_h = dims
+
+                        parsed_bbox = _bbox_from_source(
+                            source,
+                            page_w_px,
+                            page_h_px,
+                            source_page_w=source_page_w,
+                            source_page_h=source_page_h,
+                        )
+                        if parsed_bbox:
+                            _, src_bbox = parsed_bbox
+                            bbox = src_bbox
+                            page_idx = parsed_page_idx
+
+            items.append(
+                HeaderFieldItem(
+                    key=str(key),
+                    value=value,
+                    page=page_idx,
+                    bbox=bbox,
+                    source=source,
+                )
+            )
+            key_values[str(key)] = value
+
+    return items, key_values
+
+
 def _intersection_area(a: BoundingBox, b: BoundingBox) -> float:
     ax2 = a.x + a.w
     ay2 = a.y + a.h
@@ -659,6 +755,48 @@ def _split_header_items(
     return kept, headers
 
 
+def _filter_header_field_items(
+    page_images: list[Path],
+    items: list[HeaderFieldItem],
+    header_position: HeaderPosition,
+) -> list[HeaderFieldItem]:
+    if not items:
+        return items
+
+    band_ratio = float(os.environ.get("HEADER_BAND_RATIO", "0.24"))
+    band_ratio = max(0.05, min(0.45, band_ratio))
+
+    page_sizes: dict[int, tuple[int, int]] = {}
+    for p in items:
+        if p.page is None or p.page in page_sizes:
+            continue
+        if p.page < 0 or p.page >= len(page_images):
+            continue
+        with Image.open(page_images[p.page]) as img:
+            page_sizes[p.page] = (img.width, img.height)
+
+    filtered: list[HeaderFieldItem] = []
+    for item in items:
+        if item.page is None or item.bbox is None:
+            filtered.append(item)
+            continue
+        dims = page_sizes.get(item.page)
+        if not dims:
+            filtered.append(item)
+            continue
+        page_w, page_h = dims
+        if _is_in_header_band(
+            item.bbox,
+            page_w=page_w,
+            page_h=page_h,
+            header_position=header_position,
+            band_ratio=band_ratio,
+        ):
+            filtered.append(item)
+
+    return filtered
+
+
 def detect_parts_from_pdf(
     pdf_path: Path,
     page_images: list[Path],
@@ -667,7 +805,10 @@ def detect_parts_from_pdf(
     cu_analyzer_id: str | None = None,
     cu_api_version: str | None = None,
     raw_output_path: Path | None = None,
-) -> tuple[list[DetectedPart], list[DetectedPart]]:
+    cu_header_analyzer_id: str | None = None,
+    cu_header_api_version: str | None = None,
+    header_raw_output_path: Path | None = None,
+) -> tuple[list[DetectedPart], list[DetectedPart], list[HeaderFieldItem]]:
     payload = _analyze_pdf(
         pdf_path,
         analyzer_id=cu_analyzer_id,
@@ -751,4 +892,30 @@ def detect_parts_from_pdf(
         detected_parts.append(DetectedPart(title=title, bbox=bbox, page=page_idx))
 
     expanded = _expand_parts_by_grid(page_images, detected_parts, title_position=title_position)
-    return _split_header_items(page_images, expanded, header_position=header_position)
+    kept_parts, header_items = _split_header_items(page_images, expanded, header_position=header_position)
+
+    header_field_items: list[HeaderFieldItem] = []
+    resolved_header_analyzer_id = (cu_header_analyzer_id or "").strip()
+    if resolved_header_analyzer_id:
+        header_payload = _analyze_pdf(
+            pdf_path,
+            analyzer_id=resolved_header_analyzer_id,
+            api_version=cu_header_api_version,
+        )
+        if header_raw_output_path is not None:
+            try:
+                header_raw_output_path.parent.mkdir(parents=True, exist_ok=True)
+                header_raw_output_path.write_text(
+                    json.dumps(header_payload, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+            except Exception:
+                pass
+        header_field_items, _ = _extract_header_fields(header_payload, page_images)
+        header_field_items = _filter_header_field_items(
+            page_images,
+            header_field_items,
+            header_position=header_position,
+        )
+
+    return kept_parts, header_items, header_field_items

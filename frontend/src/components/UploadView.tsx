@@ -1,10 +1,11 @@
-import { ChangeEvent, DragEvent, useRef, useState } from "react";
+import { ChangeEvent, DragEvent, useEffect, useRef, useState } from "react";
 import {
   AzureCuAnalyzer,
   ENGINE_OPTIONS,
   EngineName,
   HEADER_POSITION_OPTIONS,
   HeaderPosition,
+  PageData,
   TITLE_POSITION_OPTIONS,
   TitlePosition,
 } from "../api";
@@ -13,75 +14,237 @@ interface Props {
   selectedEngine: EngineName;
   selectedTitlePosition: TitlePosition;
   selectedHeaderPosition: HeaderPosition;
-  selectedCuAnalyzerId: string;
-  selectedCuApiVersion: string;
+  selectedCuContentsAnalyzerId: string;
+  selectedCuContentsApiVersion: string;
+  selectedCuHeaderAnalyzerId: string;
+  selectedCuHeaderApiVersion: string;
   analyzerOptions: AzureCuAnalyzer[];
   analyzersFetchedAt: string | null;
   isLoadingAnalyzers: boolean;
   onEngineChange: (engine: EngineName) => void;
   onTitlePositionChange: (position: TitlePosition) => void;
   onHeaderPositionChange: (position: HeaderPosition) => void;
-  onCuAnalyzerChange: (analyzerId: string) => void;
-  onCuApiVersionChange: (apiVersion: string) => void;
+  onCuContentsAnalyzerChange: (analyzerId: string) => void;
+  onCuContentsApiVersionChange: (apiVersion: string) => void;
+  onCuHeaderAnalyzerChange: (analyzerId: string) => void;
+  onCuHeaderApiVersionChange: (apiVersion: string) => void;
   onFetchAnalyzers: () => void;
-  onUpload: (
+  onPrepare: (
     file: File,
     engine: EngineName,
     titlePosition: TitlePosition,
     headerPosition: HeaderPosition,
   ) => void;
+  onExecute: () => void;
+  preparedPages: PageData[];
   isLoading: boolean;
+  isPreparing: boolean;
+  isExecuting: boolean;
 }
 
 export default function UploadView({
   selectedEngine,
   selectedTitlePosition,
   selectedHeaderPosition,
-  selectedCuAnalyzerId,
-  selectedCuApiVersion,
+  selectedCuContentsAnalyzerId,
+  selectedCuContentsApiVersion,
+  selectedCuHeaderAnalyzerId,
+  selectedCuHeaderApiVersion,
   analyzerOptions,
   analyzersFetchedAt,
   isLoadingAnalyzers,
   onEngineChange,
   onTitlePositionChange,
   onHeaderPositionChange,
-  onCuAnalyzerChange,
-  onCuApiVersionChange,
+  onCuContentsAnalyzerChange,
+  onCuContentsApiVersionChange,
+  onCuHeaderAnalyzerChange,
+  onCuHeaderApiVersionChange,
   onFetchAnalyzers,
-  onUpload,
+  onPrepare,
+  onExecute,
+  preparedPages,
   isLoading,
+  isPreparing,
+  isExecuting,
 }: Props) {
   const [dragging, setDragging] = useState(false);
+  const [selectedPreparedPage, setSelectedPreparedPage] = useState(0);
+  const [isNarrow, setIsNarrow] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    return window.innerWidth < 980;
+  });
   const inputRef = useRef<HTMLInputElement>(null);
 
   const isAzureCu = selectedEngine === "azure_cu";
+  const headerAnalyzerOptions = analyzerOptions.filter((a) => a.analyzer_id.toLowerCase().startsWith("bph"));
+  const contentsAnalyzerOptions = analyzerOptions.filter((a) =>
+    a.analyzer_id.toLowerCase().startsWith("bpc"),
+  );
+
+  const hasPreparedPdf = preparedPages.length > 0;
+
+  useEffect(() => {
+    if (selectedPreparedPage >= preparedPages.length) {
+      setSelectedPreparedPage(0);
+    }
+  }, [preparedPages.length, selectedPreparedPage]);
+
+  useEffect(() => {
+    function onResize() {
+      setIsNarrow(window.innerWidth < 980);
+    }
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
 
   function handleDrop(e: DragEvent<HTMLDivElement>) {
     e.preventDefault();
     setDragging(false);
     const file = e.dataTransfer.files[0];
     if (file?.type === "application/pdf") {
-      onUpload(file, selectedEngine, selectedTitlePosition, selectedHeaderPosition);
+      onPrepare(file, selectedEngine, selectedTitlePosition, selectedHeaderPosition);
     }
   }
 
   function handleChange(e: ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
-    if (file) onUpload(file, selectedEngine, selectedTitlePosition, selectedHeaderPosition);
+    if (file) onPrepare(file, selectedEngine, selectedTitlePosition, selectedHeaderPosition);
   }
 
-  function handleAnalyzerSelect(value: string) {
-    onCuAnalyzerChange(value);
+  const currentPreparedPage = preparedPages[selectedPreparedPage];
+
+  function handleContentsAnalyzerSelect(value: string) {
+    onCuContentsAnalyzerChange(value);
     const found = analyzerOptions.find((a) => a.analyzer_id === value);
-    if (found) onCuApiVersionChange(found.api_version);
+    if (found) onCuContentsApiVersionChange(found.api_version);
+  }
+
+  function handleHeaderAnalyzerSelect(value: string) {
+    onCuHeaderAnalyzerChange(value);
+    const found = analyzerOptions.find((a) => a.analyzer_id === value);
+    if (found) onCuHeaderApiVersionChange(found.api_version);
   }
 
   return (
     <div style={styles.wrapper}>
-      <h1 style={styles.title}>Blueprint Extractor</h1>
-      <p style={styles.subtitle}>建築図面PDFからパーツを自動切り出しします</p>
+      <div style={styles.topBar}>
+        <div>
+          <h1 style={styles.title}>Blueprint Extractor</h1>
+          <p style={styles.subtitle}>建築図面PDFからパーツを自動切り出しします</p>
+        </div>
+        <div style={styles.topBarActions}>
+          <button
+            style={{ ...styles.btnPrimary, ...(isExecuting ? styles.btnBusy : {}) }}
+            type="button"
+            disabled={isLoading || !hasPreparedPdf}
+            onClick={onExecute}
+            title={hasPreparedPdf ? "現在の設定で解析を実行" : "先にPDFを読み込んでください"}
+          >
+            {isExecuting ? "解析実行中..." : "解析を実行"}
+          </button>
+          {isExecuting && (
+            <span style={styles.runningHint}>
+              <span style={styles.dot} />
+              AzureCU を実行しています
+            </span>
+          )}
+        </div>
+      </div>
 
-      <div style={styles.grid}>
+      <div
+        style={{
+          ...styles.grid,
+          gridTemplateColumns: isNarrow ? "1fr" : "minmax(0, 3fr) minmax(0, 2fr)",
+        }}
+      >
+        <section style={styles.card}>
+          <h2 style={styles.cardTitle}>PDFファイル</h2>
+          {!hasPreparedPdf && (
+            <div
+              style={{
+                ...styles.dropzone,
+                ...(dragging ? styles.dropzoneDragging : {}),
+                ...(isLoading ? styles.dropzoneDisabled : {}),
+              }}
+              onDragOver={(e) => {
+                e.preventDefault();
+                setDragging(true);
+              }}
+              onDragLeave={() => setDragging(false)}
+              onDrop={handleDrop}
+              onClick={() => !isLoading && inputRef.current?.click()}
+            >
+              {isLoading ? (
+                <div style={styles.loadingInner}>
+                  <div style={styles.spinner} />
+                  <p>{isPreparing ? "PDFを読み込み中..." : "解析を実行中..."}</p>
+                </div>
+              ) : (
+                <>
+                  <div style={styles.icon}>📄</div>
+                  <p style={styles.dropText}>PDFをここにドロップ</p>
+                  <p style={styles.dropSub}>またはクリックしてファイルを選択</p>
+                </>
+              )}
+            </div>
+          )}
+
+          {hasPreparedPdf && (
+            <div style={styles.previewWrap}>
+              {preparedPages.length > 1 && (
+                <div style={styles.pageTabs}>
+                  {preparedPages.map((_, i) => (
+                    <button
+                      key={i}
+                      type="button"
+                      style={{
+                        ...styles.pageTab,
+                        ...(i === selectedPreparedPage ? styles.pageTabActive : {}),
+                      }}
+                      onClick={() => setSelectedPreparedPage(i)}
+                    >
+                      ページ {i + 1}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {currentPreparedPage && (
+                <img
+                  src={`data:image/png;base64,${currentPreparedPage.data}`}
+                  alt={`プレビュー ${selectedPreparedPage + 1}`}
+                  style={styles.previewImage}
+                />
+              )}
+              <div style={styles.actionsRow}>
+                <button
+                  type="button"
+                  style={styles.btnSecondary}
+                  onClick={() => !isLoading && inputRef.current?.click()}
+                  disabled={isLoading}
+                >
+                  別のPDFを読み込む
+                </button>
+                {isExecuting && (
+                  <span style={styles.runningHint}>
+                    <span style={styles.dot} />
+                    解析実行中...
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
+
+          <input
+            ref={inputRef}
+            type="file"
+            accept="application/pdf"
+            style={{ display: "none" }}
+            onChange={handleChange}
+            disabled={isLoading}
+          />
+        </section>
+
         <section style={styles.card}>
           <h2 style={styles.cardTitle}>設定</h2>
 
@@ -137,11 +300,29 @@ export default function UploadView({
           </div>
 
           <div style={{ ...styles.formRow, ...(isAzureCu ? {} : styles.rowDisabled) }}>
-            <label htmlFor="cuApiVersion" style={styles.label}>CU API Version</label>
+            <label htmlFor="cuHeaderAnalyzer" style={styles.label}>ヘッダ用Analyzer</label>
+            <select
+              id="cuHeaderAnalyzer"
+              value={selectedCuHeaderAnalyzerId}
+              onChange={(e) => handleHeaderAnalyzerSelect(e.target.value)}
+              style={styles.select}
+              disabled={isLoading || !isAzureCu || headerAnalyzerOptions.length === 0}
+            >
+              <option value="">(未選択)</option>
+              {headerAnalyzerOptions.map((opt) => (
+                <option key={`${opt.analyzer_id}:${opt.api_version}`} value={opt.analyzer_id}>
+                  {opt.analyzer_id} ({opt.status})
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div style={{ ...styles.formRow, ...(isAzureCu ? {} : styles.rowDisabled) }}>
+            <label htmlFor="cuHeaderApiVersion" style={styles.label}>ヘッダ用 API Version</label>
             <input
-              id="cuApiVersion"
-              value={selectedCuApiVersion}
-              onChange={(e) => onCuApiVersionChange(e.target.value)}
+              id="cuHeaderApiVersion"
+              value={selectedCuHeaderApiVersion}
+              onChange={(e) => onCuHeaderApiVersionChange(e.target.value)}
               style={styles.input}
               disabled={isLoading || !isAzureCu}
               placeholder="2025-05-01-preview"
@@ -149,21 +330,33 @@ export default function UploadView({
           </div>
 
           <div style={styles.formRow}>
-            <label htmlFor="cuAnalyzer" style={styles.label}>Analyzer</label>
+            <label htmlFor="cuContentsAnalyzer" style={styles.label}>切り出し候補用Analyzer</label>
             <select
-              id="cuAnalyzer"
-              value={selectedCuAnalyzerId}
-              onChange={(e) => handleAnalyzerSelect(e.target.value)}
+              id="cuContentsAnalyzer"
+              value={selectedCuContentsAnalyzerId}
+              onChange={(e) => handleContentsAnalyzerSelect(e.target.value)}
               style={styles.select}
-              disabled={isLoading || !isAzureCu || analyzerOptions.length === 0}
+              disabled={isLoading || !isAzureCu || contentsAnalyzerOptions.length === 0}
             >
               <option value="">(未選択)</option>
-              {analyzerOptions.map((opt) => (
+              {contentsAnalyzerOptions.map((opt) => (
                 <option key={`${opt.analyzer_id}:${opt.api_version}`} value={opt.analyzer_id}>
                   {opt.analyzer_id} ({opt.status})
                 </option>
               ))}
             </select>
+          </div>
+
+          <div style={{ ...styles.formRow, ...(isAzureCu ? {} : styles.rowDisabled) }}>
+            <label htmlFor="cuContentsApiVersion" style={styles.label}>切り出し候補用 API Version</label>
+            <input
+              id="cuContentsApiVersion"
+              value={selectedCuContentsApiVersion}
+              onChange={(e) => onCuContentsApiVersionChange(e.target.value)}
+              style={styles.input}
+              disabled={isLoading || !isAzureCu}
+              placeholder="2025-05-01-preview"
+            />
           </div>
 
           <div style={styles.actionsRow}>
@@ -181,46 +374,10 @@ export default function UploadView({
                 : "未取得"}
             </span>
           </div>
-        </section>
 
-        <section style={styles.card}>
-          <h2 style={styles.cardTitle}>PDFファイル</h2>
-          <div
-            style={{
-              ...styles.dropzone,
-              ...(dragging ? styles.dropzoneDragging : {}),
-              ...(isLoading ? styles.dropzoneDisabled : {}),
-            }}
-            onDragOver={(e) => {
-              e.preventDefault();
-              setDragging(true);
-            }}
-            onDragLeave={() => setDragging(false)}
-            onDrop={handleDrop}
-            onClick={() => !isLoading && inputRef.current?.click()}
-          >
-            {isLoading ? (
-              <div style={styles.loadingInner}>
-                <div style={styles.spinner} />
-                <p>図面を解析中...</p>
-              </div>
-            ) : (
-              <>
-                <div style={styles.icon}>📄</div>
-                <p style={styles.dropText}>PDFをここにドロップ</p>
-                <p style={styles.dropSub}>またはクリックしてファイルを選択</p>
-              </>
-            )}
+          <div style={{ ...styles.actionsRow, marginTop: "0.8rem" }}>
+            <span style={styles.metaText}>{hasPreparedPdf ? "PDF読み込み済み" : "未読み込み"}</span>
           </div>
-
-          <input
-            ref={inputRef}
-            type="file"
-            accept="application/pdf"
-            style={{ display: "none" }}
-            onChange={handleChange}
-            disabled={isLoading}
-          />
         </section>
       </div>
     </div>
@@ -232,25 +389,39 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     flexDirection: "column",
     alignItems: "center",
-    justifyContent: "center",
+    justifyContent: "flex-start",
     minHeight: "100vh",
     padding: "1.5rem",
     background: "#f8fafc",
   },
+  topBar: {
+    width: "100%",
+    maxWidth: 1200,
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    gap: "1rem",
+    marginBottom: "1rem",
+  },
+  topBarActions: {
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "flex-end",
+    gap: "0.35rem",
+  },
   title: {
     fontSize: "2rem",
     fontWeight: 700,
-    marginBottom: "0.5rem",
+    marginBottom: "0.35rem",
   },
   subtitle: {
     color: "#4b5563",
-    marginBottom: "1.2rem",
+    marginBottom: 0,
   },
   grid: {
     width: "100%",
-    maxWidth: 1100,
+    maxWidth: 1200,
     display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
     gap: "1rem",
   },
   card: {
@@ -308,6 +479,33 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: "0.85rem",
     fontWeight: 600,
   },
+  btnPrimary: {
+    background: "#2563eb",
+    color: "#fff",
+    border: "none",
+    borderRadius: 8,
+    padding: "0.45rem 0.9rem",
+    fontSize: "0.85rem",
+    fontWeight: 700,
+  },
+  btnBusy: {
+    opacity: 0.85,
+  },
+  runningHint: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: "0.35rem",
+    fontSize: "0.8rem",
+    color: "#1d4ed8",
+    fontWeight: 600,
+  },
+  dot: {
+    width: 8,
+    height: 8,
+    borderRadius: 999,
+    background: "#2563eb",
+    display: "inline-block",
+  },
   metaText: {
     fontSize: "0.78rem",
     color: "#6b7280",
@@ -359,5 +557,35 @@ const styles: Record<string, React.CSSProperties> = {
     borderTop: "4px solid #2563eb",
     borderRadius: "50%",
     animation: "spin 0.8s linear infinite",
+  },
+  previewWrap: {
+    display: "flex",
+    flexDirection: "column",
+    gap: "0.6rem",
+  },
+  previewImage: {
+    width: "100%",
+    border: "1px solid #d1d5db",
+    borderRadius: 8,
+    background: "#fff",
+  },
+  pageTabs: {
+    display: "flex",
+    gap: "0.4rem",
+    flexWrap: "wrap",
+  },
+  pageTab: {
+    border: "1px solid #d1d5db",
+    background: "#fff",
+    color: "#374151",
+    borderRadius: 6,
+    padding: "0.2rem 0.55rem",
+    fontSize: "0.8rem",
+    cursor: "pointer",
+  },
+  pageTabActive: {
+    background: "#dbeafe",
+    borderColor: "#93c5fd",
+    color: "#1d4ed8",
   },
 };

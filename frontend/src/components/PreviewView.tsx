@@ -4,6 +4,7 @@ import {
   DetectionMetrics,
   ENGINE_OPTIONS,
   EngineName,
+  HeaderFieldItem,
   PageData,
   RunSummary,
 } from "../api";
@@ -12,6 +13,7 @@ interface Props {
   sessionId: string;
   pages: PageData[];
   parts: DetectedPart[];
+  headerFields: HeaderFieldItem[];
   activeEngine: EngineName;
   activeEngineLabel: string;
   metrics: DetectionMetrics | null;
@@ -27,6 +29,7 @@ export default function PreviewView({
   sessionId,
   pages,
   parts,
+  headerFields,
   activeEngine,
   activeEngineLabel,
   metrics,
@@ -43,6 +46,7 @@ export default function PreviewView({
 
   const currentPage = pages[selectedPage];
   const currentParts = parts.filter((p) => p.page === selectedPage);
+  const currentHeaderFields = headerFields.filter((f) => f.page === selectedPage && f.bbox);
 
   useEffect(() => {
     setImageSize(null);
@@ -122,6 +126,43 @@ export default function PreviewView({
       borderRadius: 3,
       whiteSpace: "nowrap",
       maxWidth: 200,
+      overflow: "hidden",
+      textOverflow: "ellipsis",
+      pointerEvents: "none",
+    };
+  }
+
+  function headerOverlayStyle(field: HeaderFieldItem, naturalW: number, naturalH: number): React.CSSProperties {
+    if (!field.bbox || !imageSize) return {};
+    const scaleX = imageSize.w / naturalW;
+    const scaleY = imageSize.h / naturalH;
+    return {
+      position: "absolute",
+      left: field.bbox.x * scaleX,
+      top: field.bbox.y * scaleY,
+      width: field.bbox.w * scaleX,
+      height: field.bbox.h * scaleY,
+      border: "2px solid #f97316",
+      boxSizing: "border-box",
+      pointerEvents: "none",
+    };
+  }
+
+  function headerLabelStyle(field: HeaderFieldItem, naturalW: number, naturalH: number): React.CSSProperties {
+    if (!field.bbox || !imageSize) return {};
+    const scaleX = imageSize.w / naturalW;
+    const scaleY = imageSize.h / naturalH;
+    return {
+      position: "absolute",
+      left: field.bbox.x * scaleX,
+      top: Math.max(0, field.bbox.y * scaleY - 22),
+      background: "#f97316",
+      color: "#fff",
+      fontSize: 11,
+      padding: "1px 4px",
+      borderRadius: 3,
+      whiteSpace: "nowrap",
+      maxWidth: 260,
       overflow: "hidden",
       textOverflow: "ellipsis",
       pointerEvents: "none",
@@ -210,6 +251,15 @@ export default function PreviewView({
                   <div key={i}>
                     <div style={overlayStyle(part, naturalW, naturalH)} />
                     <div style={labelStyle(part, naturalW, naturalH)}>{part.title}</div>
+                  </div>
+                ))}
+              {imageSize &&
+                currentHeaderFields.map((field, i) => (
+                  <div key={`hf-${i}`}>
+                    <div style={headerOverlayStyle(field, naturalW, naturalH)} />
+                    <div style={headerLabelStyle(field, naturalW, naturalH)}>
+                      {field.value}
+                    </div>
                   </div>
                 ))}
             </div>

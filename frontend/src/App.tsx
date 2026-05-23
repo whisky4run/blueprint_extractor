@@ -4,21 +4,23 @@ import {
   DetectedPart,
   DetectionMetrics,
   EngineName,
+  HeaderFieldItem,
   HeaderPosition,
   PageData,
   RunSummary,
   TitlePosition,
   downloadUrl,
   fetchAzureCuAnalyzers,
+  getUiPreferences,
   getPreview,
+  preparePdf,
+  putUiPreferences,
   reanalyze,
-  uploadPdf,
+  runPrepared,
+  UiPreferences,
 } from "./api";
 import PreviewView from "./components/PreviewView";
 import UploadView from "./components/UploadView";
-
-const ANALYZERS_CACHE_KEY = "azurecu_analyzers_cache_v1";
-const CU_SELECTION_KEY = "azurecu_selection_v1";
 
 type AppState =
   | { screen: "upload" }
@@ -27,6 +29,7 @@ type AppState =
       sessionId: string;
       pages: PageData[];
       parts: DetectedPart[];
+      headerFields: HeaderFieldItem[];
       activeEngine: EngineName;
       activeEngineLabel: string;
       metrics: DetectionMetrics | null;
@@ -39,72 +42,91 @@ export default function App() {
   const [selectedEngine, setSelectedEngine] = useState<EngineName>("azure_cu");
   const [selectedTitlePosition, setSelectedTitlePosition] = useState<TitlePosition>("top");
   const [selectedHeaderPosition, setSelectedHeaderPosition] = useState<HeaderPosition>("right");
-  const [selectedCuAnalyzerId, setSelectedCuAnalyzerId] = useState<string>("");
-  const [selectedCuApiVersion, setSelectedCuApiVersion] = useState<string>("");
+  const [selectedCuContentsAnalyzerId, setSelectedCuContentsAnalyzerId] = useState<string>("");
+  const [selectedCuContentsApiVersion, setSelectedCuContentsApiVersion] = useState<string>("");
+  const [selectedCuHeaderAnalyzerId, setSelectedCuHeaderAnalyzerId] = useState<string>("");
+  const [selectedCuHeaderApiVersion, setSelectedCuHeaderApiVersion] = useState<string>("");
   const [azureCuAnalyzers, setAzureCuAnalyzers] = useState<AzureCuAnalyzer[]>([]);
   const [analyzersFetchedAt, setAnalyzersFetchedAt] = useState<string | null>(null);
   const [isLoadingAnalyzers, setIsLoadingAnalyzers] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [isPreparing, setIsPreparing] = useState(false);
+  const [isExecuting, setIsExecuting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isPrefsReady, setIsPrefsReady] = useState(false);
+  const [preparedSessionId, setPreparedSessionId] = useState<string | null>(null);
+  const [preparedPages, setPreparedPages] = useState<PageData[]>([]);
 
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem(ANALYZERS_CACHE_KEY);
-      if (raw) {
-        const obj = JSON.parse(raw) as { analyzers?: AzureCuAnalyzer[]; fetched_at?: string };
-        if (Array.isArray(obj.analyzers)) setAzureCuAnalyzers(obj.analyzers);
-        if (typeof obj.fetched_at === "string") setAnalyzersFetchedAt(obj.fetched_at);
+    let cancelled = false;
+    async function loadPrefs() {
+      try {
+        const prefs = await getUiPreferences();
+        if (cancelled) return;
+        setSelectedCuContentsAnalyzerId(prefs.cu_selection.contents_analyzer_id || "");
+        setSelectedCuContentsApiVersion(prefs.cu_selection.contents_api_version || "");
+        setSelectedCuHeaderAnalyzerId(prefs.cu_selection.header_analyzer_id || "");
+        setSelectedCuHeaderApiVersion(prefs.cu_selection.header_api_version || "");
+        setAzureCuAnalyzers(Array.isArray(prefs.analyzer_cache.analyzers) ? prefs.analyzer_cache.analyzers : []);
+        setAnalyzersFetchedAt(prefs.analyzer_cache.fetched_at ?? null);
+      } catch {
+        // backend preference load failure should not block app usage
+      } finally {
+        if (!cancelled) setIsPrefsReady(true);
       }
-    } catch {
-      // ignore cache parse errors
     }
-
-    try {
-      const raw = localStorage.getItem(CU_SELECTION_KEY);
-      if (raw) {
-        const obj = JSON.parse(raw) as { analyzer_id?: string; api_version?: string };
-        if (typeof obj.analyzer_id === "string") setSelectedCuAnalyzerId(obj.analyzer_id);
-        if (typeof obj.api_version === "string") setSelectedCuApiVersion(obj.api_version);
-      }
-    } catch {
-      // ignore cache parse errors
-    }
+    void loadPrefs();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
-    try {
-      localStorage.setItem(
-        ANALYZERS_CACHE_KEY,
-        JSON.stringify({ analyzers: azureCuAnalyzers, fetched_at: analyzersFetchedAt }),
-      );
-    } catch {
-      // ignore storage errors
-    }
-  }, [azureCuAnalyzers, analyzersFetchedAt]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(
-        CU_SELECTION_KEY,
-        JSON.stringify({ analyzer_id: selectedCuAnalyzerId, api_version: selectedCuApiVersion }),
-      );
-    } catch {
-      // ignore storage errors
-    }
-  }, [selectedCuAnalyzerId, selectedCuApiVersion]);
+    if (!isPrefsReady) return;
+    const timer = window.setTimeout(() => {
+      const payload: UiPreferences = {
+        cu_selection: {
+          contents_analyzer_id: selectedCuContentsAnalyzerId,
+          contents_api_version: selectedCuContentsApiVersion,
+          header_analyzer_id: selectedCuHeaderAnalyzerId,
+          header_api_version: selectedCuHeaderApiVersion,
+        },
+        analyzer_cache: {
+          api_version: selectedCuContentsApiVersion || selectedCuHeaderApiVersion || "",
+          fetched_at: analyzersFetchedAt,
+          analyzers: azureCuAnalyzers,
+        },
+      };
+      void putUiPreferences(payload).catch(() => {
+        // backend preference save failure should not block app usage
+      });
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [
+    isPrefsReady,
+    selectedCuContentsAnalyzerId,
+    selectedCuContentsApiVersion,
+    selectedCuHeaderAnalyzerId,
+    selectedCuHeaderApiVersion,
+    azureCuAnalyzers,
+    analyzersFetchedAt,
+  ]);
 
   async function loadPreview(sessionId: string) {
     const preview = await getPreview(sessionId);
     setSelectedEngine(preview.active_engine);
     setSelectedTitlePosition(preview.title_position);
     setSelectedHeaderPosition(preview.header_position);
-    setSelectedCuAnalyzerId(preview.cu_analyzer_id ?? "");
-    setSelectedCuApiVersion(preview.cu_api_version ?? "");
+    setSelectedCuContentsAnalyzerId(preview.cu_contents_analyzer_id ?? "");
+    setSelectedCuContentsApiVersion(preview.cu_contents_api_version ?? "");
+    setSelectedCuHeaderAnalyzerId(preview.cu_header_analyzer_id ?? "");
+    setSelectedCuHeaderApiVersion(preview.cu_header_api_version ?? "");
     setState({
       screen: "preview",
       sessionId,
       pages: preview.pages,
       parts: preview.parts,
+      headerFields: preview.header_fields,
       activeEngine: preview.active_engine,
       activeEngineLabel: preview.active_engine_label,
       metrics: preview.metrics,
@@ -113,27 +135,63 @@ export default function App() {
     });
   }
 
-  async function handleUpload(
+  async function handlePrepare(
     file: File,
     engine: EngineName,
     titlePosition: TitlePosition,
     headerPosition: HeaderPosition,
   ) {
+    setIsPreparing(true);
     setIsLoading(true);
     setError(null);
     try {
-      const { session_id } = await uploadPdf(
+      const { session_id } = await preparePdf(
         file,
         engine,
         titlePosition,
         headerPosition,
-        selectedCuAnalyzerId || undefined,
-        selectedCuApiVersion || undefined,
+        selectedCuContentsAnalyzerId || undefined,
+        selectedCuContentsApiVersion || undefined,
+        selectedCuHeaderAnalyzerId || undefined,
+        selectedCuHeaderApiVersion || undefined,
       );
-      await loadPreview(session_id);
+      const preview = await getPreview(session_id);
+      setPreparedSessionId(session_id);
+      setPreparedPages(preview.pages);
     } catch (e) {
       setError(e instanceof Error ? e.message : "エラーが発生しました");
     } finally {
+      setIsPreparing(false);
+      setIsLoading(false);
+    }
+  }
+
+  async function handleExecute() {
+    if (!preparedSessionId) {
+      setError("先にPDFを読み込んでください");
+      return;
+    }
+    setIsExecuting(true);
+    setIsLoading(true);
+    setError(null);
+    try {
+      await runPrepared(
+        preparedSessionId,
+        selectedEngine,
+        selectedTitlePosition,
+        selectedHeaderPosition,
+        selectedCuContentsAnalyzerId || undefined,
+        selectedCuContentsApiVersion || undefined,
+        selectedCuHeaderAnalyzerId || undefined,
+        selectedCuHeaderApiVersion || undefined,
+      );
+      await loadPreview(preparedSessionId);
+      setPreparedSessionId(null);
+      setPreparedPages([]);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "実行に失敗しました");
+    } finally {
+      setIsExecuting(false);
       setIsLoading(false);
     }
   }
@@ -142,13 +200,25 @@ export default function App() {
     setIsLoadingAnalyzers(true);
     setError(null);
     try {
-      const res = await fetchAzureCuAnalyzers(selectedCuApiVersion || undefined);
+      const res = await fetchAzureCuAnalyzers(selectedCuContentsApiVersion || selectedCuHeaderApiVersion || undefined);
       setAzureCuAnalyzers(res.analyzers);
       setAnalyzersFetchedAt(res.fetched_at);
-      if (!selectedCuApiVersion) setSelectedCuApiVersion(res.api_version);
-      if (!selectedCuAnalyzerId && res.analyzers[0]) {
-        setSelectedCuAnalyzerId(res.analyzers[0].analyzer_id);
-        setSelectedCuApiVersion(res.analyzers[0].api_version);
+      const headerCandidates = res.analyzers.filter((a) => a.analyzer_id.toLowerCase().startsWith("bph"));
+      const contentsCandidates = res.analyzers.filter((a) => a.analyzer_id.toLowerCase().startsWith("bpc"));
+
+      if (!selectedCuHeaderAnalyzerId && headerCandidates[0]) {
+        setSelectedCuHeaderAnalyzerId(headerCandidates[0].analyzer_id);
+        setSelectedCuHeaderApiVersion(headerCandidates[0].api_version);
+      }
+      if (!selectedCuContentsAnalyzerId && contentsCandidates[0]) {
+        setSelectedCuContentsAnalyzerId(contentsCandidates[0].analyzer_id);
+        setSelectedCuContentsApiVersion(contentsCandidates[0].api_version);
+      }
+      if (!selectedCuHeaderApiVersion && !headerCandidates[0]) {
+        setSelectedCuHeaderApiVersion(res.api_version);
+      }
+      if (!selectedCuContentsApiVersion && !contentsCandidates[0]) {
+        setSelectedCuContentsApiVersion(res.api_version);
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Analyzer一覧の取得に失敗しました");
@@ -184,6 +254,10 @@ export default function App() {
 
   function handleReset() {
     setState({ screen: "upload" });
+    setPreparedSessionId(null);
+    setPreparedPages([]);
+    setIsPreparing(false);
+    setIsExecuting(false);
     setError(null);
   }
 
@@ -193,6 +267,7 @@ export default function App() {
         sessionId={state.sessionId}
         pages={state.pages}
         parts={state.parts}
+        headerFields={state.headerFields}
         activeEngine={state.activeEngine}
         activeEngineLabel={state.activeEngineLabel}
         metrics={state.metrics}
@@ -212,19 +287,27 @@ export default function App() {
         selectedEngine={selectedEngine}
         selectedTitlePosition={selectedTitlePosition}
         selectedHeaderPosition={selectedHeaderPosition}
-        selectedCuAnalyzerId={selectedCuAnalyzerId}
-        selectedCuApiVersion={selectedCuApiVersion}
+        selectedCuContentsAnalyzerId={selectedCuContentsAnalyzerId}
+        selectedCuContentsApiVersion={selectedCuContentsApiVersion}
+        selectedCuHeaderAnalyzerId={selectedCuHeaderAnalyzerId}
+        selectedCuHeaderApiVersion={selectedCuHeaderApiVersion}
         analyzerOptions={azureCuAnalyzers}
         analyzersFetchedAt={analyzersFetchedAt}
         isLoadingAnalyzers={isLoadingAnalyzers}
         onEngineChange={setSelectedEngine}
         onTitlePositionChange={setSelectedTitlePosition}
         onHeaderPositionChange={setSelectedHeaderPosition}
-        onCuAnalyzerChange={setSelectedCuAnalyzerId}
-        onCuApiVersionChange={setSelectedCuApiVersion}
+        onCuContentsAnalyzerChange={setSelectedCuContentsAnalyzerId}
+        onCuContentsApiVersionChange={setSelectedCuContentsApiVersion}
+        onCuHeaderAnalyzerChange={setSelectedCuHeaderAnalyzerId}
+        onCuHeaderApiVersionChange={setSelectedCuHeaderApiVersion}
         onFetchAnalyzers={handleFetchAnalyzers}
-        onUpload={handleUpload}
+        onPrepare={handlePrepare}
+        onExecute={handleExecute}
+        preparedPages={preparedPages}
         isLoading={isLoading}
+        isPreparing={isPreparing}
+        isExecuting={isExecuting}
       />
       {error && (
         <div style={errorStyle}>

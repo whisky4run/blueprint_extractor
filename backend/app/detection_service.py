@@ -17,20 +17,24 @@ def run_detection(
     header_position: HeaderPosition = "right",
     cu_analyzer_id: str | None = None,
     cu_api_version: str | None = None,
+    cu_header_analyzer_id: str | None = None,
+    cu_header_api_version: str | None = None,
     azurecu_raw_output_path: Path | None = None,
+    azurecu_header_raw_output_path: Path | None = None,
 ) -> DetectionRun:
     engine_name = normalize_engine(engine)
     start = time.perf_counter()
     failure_reason: str | None = None
     parts = []
     header_items = []
+    header_fields = []
 
     try:
         if engine_name == "opencv":
             for page_num, image_path in enumerate(page_images):
                 parts.extend(detector.detect_parts(image_path, page_num))
         elif engine_name == "azure_cu":
-            parts, header_items = cu_detector.detect_parts_from_pdf(
+            parts, header_items, header_fields = cu_detector.detect_parts_from_pdf(
                 pdf_path,
                 page_images,
                 title_position=title_position,
@@ -38,11 +42,15 @@ def run_detection(
                 cu_analyzer_id=cu_analyzer_id,
                 cu_api_version=cu_api_version,
                 raw_output_path=azurecu_raw_output_path,
+                cu_header_analyzer_id=cu_header_analyzer_id,
+                cu_header_api_version=cu_header_api_version,
+                header_raw_output_path=azurecu_header_raw_output_path,
             )
     except Exception as e:
         failure_reason = str(e)
         parts = []
         header_items = []
+        header_fields = []
 
     elapsed_ms = int((time.perf_counter() - start) * 1000)
     metrics = DetectionMetrics(
@@ -54,6 +62,7 @@ def run_detection(
         engine=engine_name,
         parts=parts,
         header_items=header_items,
+        header_fields=header_fields,
         metrics=metrics,
         executed_at=datetime.now(UTC).isoformat(),
     )

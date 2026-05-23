@@ -21,8 +21,10 @@ def create_session() -> str:
         "active_engine": DEFAULT_ENGINE,
         "title_position": DEFAULT_TITLE_POSITION,
         "header_position": DEFAULT_HEADER_POSITION,
-        "cu_analyzer_id": None,
-        "cu_api_version": None,
+        "cu_contents_analyzer_id": None,
+        "cu_contents_api_version": None,
+        "cu_header_analyzer_id": None,
+        "cu_header_api_version": None,
         "runs": {},
     }
     return session_id
@@ -56,14 +58,27 @@ def get_header_position(session_id: str) -> HeaderPosition:
     return _sessions[session_id]["header_position"]
 
 
-def set_cu_selection(session_id: str, analyzer_id: str | None, api_version: str | None) -> None:
-    _sessions[session_id]["cu_analyzer_id"] = analyzer_id
-    _sessions[session_id]["cu_api_version"] = api_version
+def set_cu_selection(
+    session_id: str,
+    contents_analyzer_id: str | None,
+    contents_api_version: str | None,
+    header_analyzer_id: str | None,
+    header_api_version: str | None,
+) -> None:
+    _sessions[session_id]["cu_contents_analyzer_id"] = contents_analyzer_id
+    _sessions[session_id]["cu_contents_api_version"] = contents_api_version
+    _sessions[session_id]["cu_header_analyzer_id"] = header_analyzer_id
+    _sessions[session_id]["cu_header_api_version"] = header_api_version
 
 
-def get_cu_selection(session_id: str) -> tuple[str | None, str | None]:
+def get_cu_selection(session_id: str) -> tuple[str | None, str | None, str | None, str | None]:
     sess = _sessions[session_id]
-    return sess.get("cu_analyzer_id"), sess.get("cu_api_version")
+    return (
+        sess.get("cu_contents_analyzer_id"),
+        sess.get("cu_contents_api_version"),
+        sess.get("cu_header_analyzer_id"),
+        sess.get("cu_header_api_version"),
+    )
 
 
 def set_session_run(session_id: str, run: DetectionRun) -> None:

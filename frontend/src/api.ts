@@ -35,12 +35,25 @@ export interface DetectedPart {
   page: number;
 }
 
+export interface HeaderFieldItem {
+  key: string;
+  value: string;
+  page: number | null;
+  bbox: BoundingBox | null;
+  source: string | null;
+}
+
 export interface UploadResponse {
   session_id: string;
   pages: number;
   engine: EngineName;
   parts: DetectedPart[];
   metrics: DetectionMetrics;
+}
+
+export interface PrepareResponse {
+  session_id: string;
+  pages: number;
 }
 
 export interface PageData {
@@ -55,9 +68,12 @@ export interface PreviewResponse {
   active_engine_label: string;
   title_position: TitlePosition;
   header_position: HeaderPosition;
-  cu_analyzer_id: string | null;
-  cu_api_version: string | null;
+  cu_contents_analyzer_id: string | null;
+  cu_contents_api_version: string | null;
+  cu_header_analyzer_id: string | null;
+  cu_header_api_version: string | null;
   parts: DetectedPart[];
+  header_fields: HeaderFieldItem[];
   metrics: DetectionMetrics | null;
   has_downloadable_result: boolean;
   runs: Record<string, RunSummary>;
@@ -77,6 +93,20 @@ export interface AzureCuAnalyzersResponse {
   count: number;
   fetched_at: string;
   analyzers: AzureCuAnalyzer[];
+}
+
+export interface UiPreferences {
+  cu_selection: {
+    contents_analyzer_id: string;
+    contents_api_version: string;
+    header_analyzer_id: string;
+    header_api_version: string;
+  };
+  analyzer_cache: {
+    api_version: string;
+    fetched_at: string | null;
+    analyzers: AzureCuAnalyzer[];
+  };
 }
 
 export interface DetectionMetrics {
@@ -104,17 +134,74 @@ export async function uploadPdf(
   engine: EngineName,
   titlePosition: TitlePosition,
   headerPosition: HeaderPosition,
-  cuAnalyzerId?: string | null,
-  cuApiVersion?: string | null,
+  cuContentsAnalyzerId?: string | null,
+  cuContentsApiVersion?: string | null,
+  cuHeaderAnalyzerId?: string | null,
+  cuHeaderApiVersion?: string | null,
 ): Promise<UploadResponse> {
   const form = new FormData();
   form.append("file", file);
   form.append("engine", engine);
   form.append("title_position", titlePosition);
   form.append("header_position", headerPosition);
-  if (cuAnalyzerId) form.append("cu_analyzer_id", cuAnalyzerId);
-  if (cuApiVersion) form.append("cu_api_version", cuApiVersion);
+  if (cuContentsAnalyzerId) form.append("cu_contents_analyzer_id", cuContentsAnalyzerId);
+  if (cuContentsApiVersion) form.append("cu_contents_api_version", cuContentsApiVersion);
+  if (cuHeaderAnalyzerId) form.append("cu_header_analyzer_id", cuHeaderAnalyzerId);
+  if (cuHeaderApiVersion) form.append("cu_header_api_version", cuHeaderApiVersion);
   const res = await fetch(`${BASE_URL}/api/upload`, { method: "POST", body: form });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(detail.detail ?? res.statusText);
+  }
+  return res.json();
+}
+
+export async function preparePdf(
+  file: File,
+  engine: EngineName,
+  titlePosition: TitlePosition,
+  headerPosition: HeaderPosition,
+  cuContentsAnalyzerId?: string | null,
+  cuContentsApiVersion?: string | null,
+  cuHeaderAnalyzerId?: string | null,
+  cuHeaderApiVersion?: string | null,
+): Promise<PrepareResponse> {
+  const form = new FormData();
+  form.append("file", file);
+  form.append("engine", engine);
+  form.append("title_position", titlePosition);
+  form.append("header_position", headerPosition);
+  if (cuContentsAnalyzerId) form.append("cu_contents_analyzer_id", cuContentsAnalyzerId);
+  if (cuContentsApiVersion) form.append("cu_contents_api_version", cuContentsApiVersion);
+  if (cuHeaderAnalyzerId) form.append("cu_header_analyzer_id", cuHeaderAnalyzerId);
+  if (cuHeaderApiVersion) form.append("cu_header_api_version", cuHeaderApiVersion);
+  const res = await fetch(`${BASE_URL}/api/prepare`, { method: "POST", body: form });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(detail.detail ?? res.statusText);
+  }
+  return res.json();
+}
+
+export async function runPrepared(
+  sessionId: string,
+  engine: EngineName,
+  titlePosition: TitlePosition,
+  headerPosition: HeaderPosition,
+  cuContentsAnalyzerId?: string | null,
+  cuContentsApiVersion?: string | null,
+  cuHeaderAnalyzerId?: string | null,
+  cuHeaderApiVersion?: string | null,
+): Promise<ReanalyzeResponse> {
+  const form = new FormData();
+  form.append("engine", engine);
+  form.append("title_position", titlePosition);
+  form.append("header_position", headerPosition);
+  if (cuContentsAnalyzerId) form.append("cu_contents_analyzer_id", cuContentsAnalyzerId);
+  if (cuContentsApiVersion) form.append("cu_contents_api_version", cuContentsApiVersion);
+  if (cuHeaderAnalyzerId) form.append("cu_header_analyzer_id", cuHeaderAnalyzerId);
+  if (cuHeaderApiVersion) form.append("cu_header_api_version", cuHeaderApiVersion);
+  const res = await fetch(`${BASE_URL}/api/run/${sessionId}`, { method: "POST", body: form });
   if (!res.ok) {
     const detail = await res.json().catch(() => ({ detail: res.statusText }));
     throw new Error(detail.detail ?? res.statusText);
@@ -142,6 +229,28 @@ export async function reanalyze(sessionId: string, engine: EngineName): Promise<
 export async function fetchAzureCuAnalyzers(apiVersion?: string): Promise<AzureCuAnalyzersResponse> {
   const qp = apiVersion ? `?api_version=${encodeURIComponent(apiVersion)}` : "";
   const res = await fetch(`${BASE_URL}/api/azurecu/analyzers${qp}`);
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(detail.detail ?? res.statusText);
+  }
+  return res.json();
+}
+
+export async function getUiPreferences(): Promise<UiPreferences> {
+  const res = await fetch(`${BASE_URL}/api/ui/preferences`);
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(detail.detail ?? res.statusText);
+  }
+  return res.json();
+}
+
+export async function putUiPreferences(prefs: UiPreferences): Promise<UiPreferences> {
+  const res = await fetch(`${BASE_URL}/api/ui/preferences`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(prefs),
+  });
   if (!res.ok) {
     const detail = await res.json().catch(() => ({ detail: res.statusText }));
     throw new Error(detail.detail ?? res.statusText);
