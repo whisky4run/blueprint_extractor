@@ -2,6 +2,7 @@ import json
 import os
 import re
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from urllib import error, request
 
@@ -13,6 +14,15 @@ from app.models import BoundingBox, DetectedPart, HeaderFieldItem
 from app.title_position import TitlePosition
 
 _SOURCE_PATTERN = re.compile(r"D\(([^)]+)\)")
+
+
+@dataclass(frozen=True)
+class _PageCrop:
+    page_idx: int
+    image_path: Path
+    offset_x: float
+    offset_y: float
+    bbox: BoundingBox
 
 
 def _required_env(name: str) -> str:
@@ -69,10 +79,11 @@ def list_analyzers(api_version: str | None = None) -> list[dict]:
     return items
 
 
-def _analyze_pdf(
-    pdf_path: Path,
+def _analyze_binary(
+    input_path: Path,
     analyzer_id: str | None = None,
     api_version: str | None = None,
+    content_type: str = "application/octet-stream",
 ) -> dict:
     endpoint = _required_env("AZURE_CU_ENDPOINT").rstrip("/")
     api_key = _required_env("AZURE_CU_API_KEY")
@@ -85,12 +96,12 @@ def _analyze_pdf(
         f"?api-version={resolved_api_version}"
     )
     headers = _cu_headers(api_key)
-    headers["Content-Type"] = "application/octet-stream"
+    headers["Content-Type"] = content_type
     status, res_headers, body = _http_json(
         "POST",
         analyze_url,
         headers,
-        data=pdf_path.read_bytes(),
+        data=input_path.read_bytes(),
     )
 
     if status == 200:
@@ -117,6 +128,32 @@ def _analyze_pdf(
             return payload
         if status_text in {"failed", "canceled"}:
             raise RuntimeError(f"AzureCU 解析失敗: status={status_text}")
+
+
+def _analyze_pdf(
+    pdf_path: Path,
+    analyzer_id: str | None = None,
+    api_version: str | None = None,
+) -> dict:
+    return _analyze_binary(
+        pdf_path,
+        analyzer_id=analyzer_id,
+        api_version=api_version,
+        content_type="application/pdf",
+    )
+
+
+def _analyze_image(
+    image_path: Path,
+    analyzer_id: str | None = None,
+    api_version: str | None = None,
+) -> dict:
+    return _analyze_binary(
+        image_path,
+        analyzer_id=analyzer_id,
+        api_version=api_version,
+        content_type="image/png",
+    )
 
 
 def _field_to_object(field: object) -> dict:
@@ -797,6 +834,220 @@ def _filter_header_field_items(
     return filtered
 
 
+def _fallback_header_rect(page_w: int, page_h: int, header_position: HeaderPosition) -> BoundingBox:
+    band_ratio = float(os.environ.get("HEADER_BAND_RATIO", "0.24"))
+    band_ratio = max(0.05, min(0.45, band_ratio))
+    if header_position == "right":
+        x = page_w * (1.0 - band_ratio)
+        return BoundingBox(x=x, y=0, w=page_w - x, h=page_h)
+    if header_position == "left":
+        w = page_w * band_ratio
+        return BoundingBox(x=0, y=0, w=w, h=page_h)
+    if header_position == "top":
+        h = page_h * band_ratio
+        return BoundingBox(x=0, y=0, w=page_w, h=h)
+    h = page_h * band_ratio
+    return BoundingBox(x=0, y=page_h - h, w=page_w, h=h)
+
+
+def _detect_header_rect(image_path: Path, header_position: HeaderPosition) -> BoundingBox:
+    with Image.open(image_path) as img:
+        page_w, page_h = img.width, img.height
+
+    cells = detect_all_cells(image_path)
+    if not cells:
+        return _fallback_header_rect(page_w, page_h, header_position)
+
+    band_ratio = float(os.environ.get("HEADER_BAND_RATIO", "0.24"))
+    band_ratio = max(0.05, min(0.45, band_ratio))
+    candidates = [
+        c
+        for c in cells
+        if _is_in_header_band(
+            c,
+            page_w=page_w,
+            page_h=page_h,
+            header_position=header_position,
+            band_ratio=band_ratio,
+        )
+    ]
+    if not candidates:
+        return _fallback_header_rect(page_w, page_h, header_position)
+
+    merged = _merge_cell_bboxes(candidates)
+    if header_position == "right":
+        return BoundingBox(x=merged.x, y=0, w=page_w - merged.x, h=page_h)
+    if header_position == "left":
+        right = merged.x + merged.w
+        return BoundingBox(x=0, y=0, w=right, h=page_h)
+    if header_position == "top":
+        bottom = merged.y + merged.h
+        return BoundingBox(x=0, y=0, w=page_w, h=bottom)
+    return BoundingBox(x=0, y=merged.y, w=page_w, h=page_h - merged.y)
+
+
+def _content_rect_from_header(
+    page_w: int,
+    page_h: int,
+    header_rect: BoundingBox,
+    header_position: HeaderPosition,
+) -> BoundingBox:
+    if header_position == "right":
+        return BoundingBox(x=0, y=0, w=header_rect.x, h=page_h)
+    if header_position == "left":
+        x = header_rect.x + header_rect.w
+        return BoundingBox(x=x, y=0, w=page_w - x, h=page_h)
+    if header_position == "top":
+        y = header_rect.y + header_rect.h
+        return BoundingBox(x=0, y=y, w=page_w, h=page_h - y)
+    return BoundingBox(x=0, y=0, w=page_w, h=header_rect.y)
+
+
+def _save_crop(page_image: Path, bbox: BoundingBox, out_dir: Path, name: str, page_idx: int) -> _PageCrop | None:
+    with Image.open(page_image) as img:
+        page_w, page_h = img.width, img.height
+        left = max(0, min(page_w, int(round(bbox.x))))
+        top = max(0, min(page_h, int(round(bbox.y))))
+        right = max(left, min(page_w, int(round(bbox.x + bbox.w))))
+        bottom = max(top, min(page_h, int(round(bbox.y + bbox.h))))
+        if right <= left or bottom <= top:
+            return None
+
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / f"{name}_page_{page_idx + 1}.png"
+        img.crop((left, top, right, bottom)).save(out_path, format="PNG")
+
+    crop_bbox = BoundingBox(x=float(left), y=float(top), w=float(right - left), h=float(bottom - top))
+    return _PageCrop(
+        page_idx=page_idx,
+        image_path=out_path,
+        offset_x=crop_bbox.x,
+        offset_y=crop_bbox.y,
+        bbox=crop_bbox,
+    )
+
+
+def _prepare_azurecu_image_inputs(
+    pdf_path: Path,
+    page_images: list[Path],
+    header_position: HeaderPosition,
+) -> tuple[list[_PageCrop], list[_PageCrop]]:
+    out_dir = pdf_path.parent / "azurecu_inputs"
+    content_crops: list[_PageCrop] = []
+    header_crops: list[_PageCrop] = []
+
+    for page_idx, page_image in enumerate(page_images):
+        with Image.open(page_image) as img:
+            page_w, page_h = img.width, img.height
+
+        header_rect = _detect_header_rect(page_image, header_position)
+        content_rect = _content_rect_from_header(page_w, page_h, header_rect, header_position)
+
+        content_crop = _save_crop(page_image, content_rect, out_dir, "contents", page_idx)
+        header_crop = _save_crop(page_image, header_rect, out_dir, "header", page_idx)
+        if content_crop:
+            content_crops.append(content_crop)
+        if header_crop:
+            header_crops.append(header_crop)
+
+    return content_crops, header_crops
+
+
+def _offset_bbox(bbox: BoundingBox, crop: _PageCrop) -> BoundingBox:
+    return BoundingBox(
+        x=bbox.x + crop.offset_x,
+        y=bbox.y + crop.offset_y,
+        w=bbox.w,
+        h=bbox.h,
+    )
+
+
+def _write_analysis_artifact(output_path: Path | None, kind: str, analyses: list[tuple[_PageCrop, dict]]) -> None:
+    if output_path is None:
+        return
+    try:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "kind": kind,
+            "input": "image",
+            "items": [
+                {
+                    "page": crop.page_idx,
+                    "image": str(crop.image_path),
+                    "offset": {"x": crop.offset_x, "y": crop.offset_y},
+                    "bbox": crop.bbox.model_dump(),
+                    "payload": payload,
+                }
+                for crop, payload in analyses
+            ],
+        }
+        output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _extract_header_fields_from_crop(payload: dict, crop: _PageCrop) -> list[HeaderFieldItem]:
+    result = payload.get("result", {})
+    contents = result.get("contents")
+    if not isinstance(contents, list):
+        return []
+
+    page_size_map = _extract_page_size_map(payload)
+    items: list[HeaderFieldItem] = []
+
+    with Image.open(crop.image_path) as img:
+        crop_w_px, crop_h_px = img.width, img.height
+
+    for content in contents:
+        if not isinstance(content, dict):
+            continue
+        fields = content.get("fields")
+        if not isinstance(fields, dict):
+            continue
+
+        for key, field in fields.items():
+            if not isinstance(field, dict):
+                continue
+
+            value = _field_value_to_string(field)
+            if not value:
+                continue
+
+            source = _field_to_string(field.get("source")) or None
+            bbox: BoundingBox | None = None
+            if source:
+                source_parsed = _parse_source(source)
+                source_page_w = None
+                source_page_h = None
+                if source_parsed:
+                    dims = page_size_map.get(source_parsed[0])
+                    if dims:
+                        source_page_w, source_page_h = dims
+
+                parsed_bbox = _bbox_from_source(
+                    source,
+                    crop_w_px,
+                    crop_h_px,
+                    source_page_w=source_page_w,
+                    source_page_h=source_page_h,
+                )
+                if parsed_bbox:
+                    _, src_bbox = parsed_bbox
+                    bbox = _offset_bbox(src_bbox, crop)
+
+            items.append(
+                HeaderFieldItem(
+                    key=str(key),
+                    value=value,
+                    page=crop.page_idx,
+                    bbox=bbox,
+                    source=source,
+                )
+            )
+
+    return items
+
+
 def detect_parts_from_pdf(
     pdf_path: Path,
     page_images: list[Path],
@@ -809,87 +1060,85 @@ def detect_parts_from_pdf(
     cu_header_api_version: str | None = None,
     header_raw_output_path: Path | None = None,
 ) -> tuple[list[DetectedPart], list[DetectedPart], list[HeaderFieldItem]]:
-    payload = _analyze_pdf(
+    content_crops, header_crops = _prepare_azurecu_image_inputs(
         pdf_path,
-        analyzer_id=cu_analyzer_id,
-        api_version=cu_api_version,
+        page_images,
+        header_position=header_position,
     )
-    if raw_output_path is not None:
-        try:
-            raw_output_path.parent.mkdir(parents=True, exist_ok=True)
-            raw_output_path.write_text(
-                json.dumps(payload, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
-        except Exception:
-            # 生JSON保存失敗は検出処理の失敗要因にしない
-            pass
-    page_size_map = _extract_page_size_map(payload)
-    rows = _extract_rows(payload)
+
+    content_analyses: list[tuple[_PageCrop, dict]] = []
+    for crop in content_crops:
+        payload = _analyze_image(
+            crop.image_path,
+            analyzer_id=cu_analyzer_id,
+            api_version=cu_api_version,
+        )
+        content_analyses.append((crop, payload))
+    _write_analysis_artifact(raw_output_path, "contents", content_analyses)
 
     detected_parts: list[DetectedPart] = []
     seen: set[tuple] = set()
 
-    for row in rows:
-        title = _field_to_string(row.get("title"))
-        if not title:
-            continue
+    for crop, payload in content_analyses:
+        page_size_map = _extract_page_size_map(payload)
+        rows = _extract_rows(payload)
 
-        source = _field_to_string(row.get("source"))
-        source_parsed = _parse_source(source) if source else None
+        with Image.open(crop.image_path) as crop_img:
+            crop_w_px, crop_h_px = crop_img.width, crop_img.height
 
-        page_num = _field_to_int(row.get("page"))
-        if page_num is None and source_parsed:
-            page_num = source_parsed[0]
-        if page_num is None:
-            page_num = 1
+        for row in rows:
+            title = _field_to_string(row.get("title"))
+            if not title:
+                continue
 
-        page_idx = page_num - 1
-        if page_idx < 0 or page_idx >= len(page_images):
-            continue
+            source = _field_to_string(row.get("source"))
+            source_parsed = _parse_source(source) if source else None
 
-        with Image.open(page_images[page_idx]) as page_img:
-            page_w_px, page_h_px = page_img.width, page_img.height
+            page_num = _field_to_int(row.get("page"))
+            if page_num is None and source_parsed:
+                page_num = source_parsed[0]
+            if page_num is None:
+                page_num = 1
 
-        bbox = _bbox_from_field(row.get("bbox"), page_w_px, page_h_px)
+            bbox = _bbox_from_field(row.get("bbox"), crop_w_px, crop_h_px)
 
-        if not bbox and source:
-            source_page_w = None
-            source_page_h = None
-            dims = page_size_map.get(page_num)
-            if dims:
-                source_page_w, source_page_h = dims
+            if not bbox and source:
+                source_page_w = None
+                source_page_h = None
+                dims = page_size_map.get(page_num)
+                if dims:
+                    source_page_w, source_page_h = dims
 
-            parsed_bbox = _bbox_from_source(
-                source,
-                page_w_px,
-                page_h_px,
-                source_page_w=source_page_w,
-                source_page_h=source_page_h,
-            )
-            if parsed_bbox:
-                src_page_num, src_bbox = parsed_bbox
-                src_page_idx = src_page_num - 1
-                if 0 <= src_page_idx < len(page_images):
-                    page_idx = src_page_idx
+                parsed_bbox = _bbox_from_source(
+                    source,
+                    crop_w_px,
+                    crop_h_px,
+                    source_page_w=source_page_w,
+                    source_page_h=source_page_h,
+                )
+                if parsed_bbox:
+                    _, src_bbox = parsed_bbox
                     bbox = src_bbox
 
-        if not bbox or bbox.w <= 0 or bbox.h <= 0:
-            continue
+            if not bbox or bbox.w <= 0 or bbox.h <= 0:
+                continue
 
-        key = (
-            title,
-            page_idx,
-            round(bbox.x, 1),
-            round(bbox.y, 1),
-            round(bbox.w, 1),
-            round(bbox.h, 1),
-        )
-        if key in seen:
-            continue
-        seen.add(key)
+            bbox = _offset_bbox(bbox, crop)
+            page_idx = crop.page_idx
 
-        detected_parts.append(DetectedPart(title=title, bbox=bbox, page=page_idx))
+            key = (
+                title,
+                page_idx,
+                round(bbox.x, 1),
+                round(bbox.y, 1),
+                round(bbox.w, 1),
+                round(bbox.h, 1),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+
+            detected_parts.append(DetectedPart(title=title, bbox=bbox, page=page_idx))
 
     expanded = _expand_parts_by_grid(page_images, detected_parts, title_position=title_position)
     kept_parts, header_items = _split_header_items(page_images, expanded, header_position=header_position)
@@ -897,21 +1146,16 @@ def detect_parts_from_pdf(
     header_field_items: list[HeaderFieldItem] = []
     resolved_header_analyzer_id = (cu_header_analyzer_id or "").strip()
     if resolved_header_analyzer_id:
-        header_payload = _analyze_pdf(
-            pdf_path,
-            analyzer_id=resolved_header_analyzer_id,
-            api_version=cu_header_api_version,
-        )
-        if header_raw_output_path is not None:
-            try:
-                header_raw_output_path.parent.mkdir(parents=True, exist_ok=True)
-                header_raw_output_path.write_text(
-                    json.dumps(header_payload, ensure_ascii=False, indent=2),
-                    encoding="utf-8",
-                )
-            except Exception:
-                pass
-        header_field_items, _ = _extract_header_fields(header_payload, page_images)
+        header_analyses: list[tuple[_PageCrop, dict]] = []
+        for crop in header_crops:
+            header_payload = _analyze_image(
+                crop.image_path,
+                analyzer_id=resolved_header_analyzer_id,
+                api_version=cu_header_api_version,
+            )
+            header_analyses.append((crop, header_payload))
+            header_field_items.extend(_extract_header_fields_from_crop(header_payload, crop))
+        _write_analysis_artifact(header_raw_output_path, "header", header_analyses)
         header_field_items = _filter_header_field_items(
             page_images,
             header_field_items,
