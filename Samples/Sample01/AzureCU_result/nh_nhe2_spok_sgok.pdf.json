@@ -1,0 +1,174 @@
+{
+	"id": "b18d46b3-ee5e-4f16-82c3-38e9856bdbab",
+	"status": "Succeeded",
+	"result": {
+		"analyzerId": "projectAnalyzer_1779286410248_711",
+		"apiVersion": "2025-11-01",
+		"createdAt": "2026-05-23T11:16:41Z",
+		"stringEncoding": "codePoint",
+		"warnings": [
+			{
+				"code": "LLMStats",
+				"message": "completion calls: 2; completion latency: 1.77s"
+			}
+		],
+		"contents": [
+			{
+				"path": "input1",
+				"markdown": "<table>\n<tr>\n<th colspan=\"2\">Pタイル用</th>\n<th>磁器タイル用</th>\n</tr>\n<tr>\n<td colspan=\"2\">NHE Ⅱ-450 SPOK<br>S:1/10</td>\n<td>NHE Ⅱ-450 SGOK<br>S:1/10</td>\n</tr>\n<tr>\n<td colspan=\"2\">450<br>T<br>25.5<br>450<br>95<br>44<br>25.5<br>Pタイル用<br>40 42<br>T<br>T</td>\n<td>450<br>25.5<br>450<br>95<br>44<br>5<br>磁器タイル用<br>40 42</td>\n</tr>\n<tr>\n<td colspan=\"2\">NHE Ⅱ-600 SPOK<br>S:1/10</td>\n<td>NHE Ⅱ-600 SGOK<br>S:1/10</td>\n</tr>\n<tr>\n<td colspan=\"2\">600</td>\n<td rowspan=\"3\">600<br>25.5<br>600<br>95<br>44<br>25.5<br>磁器タイル用<br>40 42</td>\n</tr>\n<tr>\n<td rowspan=\"2\">600</td>\n<td>25.5<br>95<br>44<br>25.5<br>Pタイル用<br>40 42</td>\n</tr>\n<tr>\n<td>![](figures/1.1)<br>T<br>7</td>\n</tr>\n<tr>\n<td colspan=\"2\">NHE Ⅱ-600 SPOK<br>S : 1/5<br>※(<br>)内寸法はNHE Ⅱ-450を示す</td>\n<td>NHE Ⅱ-600 SGOK<br>S : 1/5 ※(<br>)内寸法はNHE Ⅱ-450を示す</td>\n</tr>\n<tr>\n<td colspan=\"2\">![](figures/1.2)<br>外蓋寸法 600(450)<br>6.5<br>内置寸法 587(437)<br>128.5(125.5)<br>165x2 (186x1)<br>5.5<br>42<br>5.5<br>外枠<br>内枠<br>鍵付取手<br>3<br>40<br>43.2<br>-溶接アンカー及び丸鋼(別途工事)<br>534(384)<br>13.4<br>有効開口寸法 573.2(423.2)</td>\n<td>外蓋寸法 600(450)<br>6.5<br>内蓋寸法587(437)<br>5.5<br>128.5 (125.5)<br>165x2 (186x1)<br>42<br>5.5<br>外枠<br>内枠<br>鍵付取手<br>3<br>溶接アンカー及び丸鋼(別途工事)<br>534 (384)<br>13.4<br>有効開口寸法 573.2(423.2)</td>\n</tr>\n</table>\n\n\n外枠▪内枠断面詳細図\n\nS : 1/1\n\n\n![ナカ工業株式会社](figures/1.3)\n\n\n品名:\n\n床点検口\nニューハッチ\n\n形式:\n\nNHEⅡシリーズ\nステンレス目地タイプ\n\n仕様:\n\n●外枠·内枠:アルミニウム押出形材\nアルマイト処理 9μm以上\nクリア仕上\n7μm以上\n\n●目 地:ステンレス SUS304 HL\n\n●底 板:高耐食性めっき鋼板\n\n●補強材:溶融亜鉛めっき鋼板\n\n●取手:落し込み式 鍵付\n(化粧キャップ付)\nSUS304 HL\nASB樹脂一体成形\n\n●パッキン;軟質塩化ビニル樹脂\n\n※最大仕上げ厚\n\n▪Pタイル用\nMAX 3mm\n\n▪磁器タイル用 MAX 17mm\n\n図面名称:\n\n平面図▪断面図\n\n尺度:\n1/10 1/5 1/1\n\n作成日:\n2008.07.18\n(2025.7.29改訂)\n\nサイズ:\nA3\n\nFile Name :\nnh_nhe2_spok_sgok\n\n\n![5.5 5.5 外枠 -内枠 43.2 43.2 13.4](figures/1.4)\n\n\nNHE Ⅱ SP\n\n\nNHE Ⅱ SG\n\n![5.515.5 外枠 内枠 43.2 43.2 13.4](figures/1.5)\n\n",
+				"fields": {
+					"図面パーツタイトル_01": {
+						"type": "string",
+						"valueString": "NHE Ⅱ-450 SPOK",
+						"spans": [
+							{
+								"offset": 83,
+								"length": 14
+							}
+						],
+						"confidence": 0.359,
+						"source": "D(1,0.4871,0.7597,1.6507,0.7581,1.6509,0.9060,0.4873,0.9076)"
+					},
+					"図面パーツタイトル_02": {
+						"type": "string",
+						"valueString": "NHE Ⅱ-450 SGOK",
+						"spans": [
+							{
+								"offset": 117,
+								"length": 14
+							}
+						],
+						"confidence": 0.578,
+						"source": "D(1,5.5085,0.7548,6.6804,0.7605,6.6797,0.9079,5.5078,0.9022)"
+					},
+					"図面パーツタイトル_03": {
+						"type": "string",
+						"valueString": "NHE Ⅱ-600 SPOK",
+						"spans": [
+							{
+								"offset": 683,
+								"length": 14
+							}
+						],
+						"confidence": 0.713,
+						"source": "D(1,0.4884,8.3480,1.6513,8.3530,1.6507,8.5048,0.4878,8.4999)"
+					},
+					"図面パーツタイトル_04": {
+						"type": "string",
+						"valueString": "NHE Ⅱ-600 SGOK",
+						"spans": [
+							{
+								"offset": 745,
+								"length": 14
+							}
+						],
+						"confidence": 0.886,
+						"source": "D(1,5.5408,8.3540,6.7039,8.3540,6.7039,8.5025,5.5408,8.5025)"
+					},
+					"図面パーツタイトル_05": {
+						"type": "string",
+						"valueString": "NHE Ⅱ-600 SPOK",
+						"spans": [
+							{
+								"offset": 683,
+								"length": 14
+							}
+						],
+						"confidence": 0.49,
+						"source": "D(1,0.4884,8.3480,1.6513,8.3530,1.6507,8.5048,0.4878,8.4999)"
+					},
+					"図面パーツタイトル_06": {
+						"type": "string",
+						"valueString": "NHE Ⅱ-600 SGOK",
+						"spans": [
+							{
+								"offset": 745,
+								"length": 14
+							}
+						],
+						"confidence": 0.876,
+						"source": "D(1,5.5408,8.3540,6.7039,8.3540,6.7039,8.5025,5.5408,8.5025)"
+					},
+					"図面パーツタイトル_07": {
+						"type": "string",
+						"valueString": "床点検口\nニューハッチ",
+						"spans": [
+							{
+								"offset": 1306,
+								"length": 4
+							},
+							{
+								"offset": 1311,
+								"length": 6
+							}
+						],
+						"confidence": 0.37,
+						"source": "D(1,14.4578,1.1647,15.0314,1.1650,15.0313,1.3213,14.4577,1.3210);D(1,14.3609,1.3491,15.1286,1.3515,15.1282,1.4819,14.3605,1.4795)"
+					},
+					"図面パーツタイトル_08": {
+						"type": "string",
+						"valueString": "NHEⅡシリーズ\nステンレス目地タイプ",
+						"spans": [
+							{
+								"offset": 1324,
+								"length": 8
+							},
+							{
+								"offset": 1333,
+								"length": 10
+							}
+						],
+						"confidence": 0.739,
+						"source": "D(1,14.2720,1.7171,15.2010,1.7180,15.2009,1.8631,14.2719,1.8622);D(1,14.1021,1.8970,15.3867,1.8947,15.3870,2.0514,14.1024,2.0537)"
+					},
+					"図面パーツタイトル_09": {
+						"type": "string",
+						"valueString": "平面図▪断面図",
+						"spans": [
+							{
+								"offset": 1560,
+								"length": 7
+							}
+						],
+						"confidence": 0.52,
+						"source": "D(1,14.2559,9.8443,15.1928,9.8443,15.1928,10.0042,14.2559,10.0042)"
+					},
+					"図面パーツタイトル_10": {
+						"type": "string",
+						"valueString": "nh_nhe2_spok_sgok",
+						"spans": [
+							{
+								"offset": 1639,
+								"length": 17
+							}
+						],
+						"confidence": 0.728,
+						"source": "D(1,14.8697,11.0495,16.0086,11.0504,16.0086,11.1865,14.8697,11.1848)"
+					}
+				},
+				"kind": "document",
+				"startPageNumber": 1,
+				"endPageNumber": 1,
+				"unit": "inch",
+				"pages": [
+					{
+						"pageNumber": 1,
+						"angle": 0,
+						"width": 16.5417,
+						"height": 11.6944
+					}
+				],
+				"analyzerId": "projectAnalyzer_1779286410248_711",
+				"mimeType": "application/pdf"
+			}
+		]
+	},
+	"usage": {
+		"documentPagesStandard": 1,
+		"contextualizationTokens": 1000,
+		"tokens": {
+			"gpt-4.1-input": 5240,
+			"gpt-4.1-output": 345
+		}
+	}
+}

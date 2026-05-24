@@ -70,6 +70,7 @@ export default function UploadView({
 }: Props) {
   const [dragging, setDragging] = useState(false);
   const [selectedPreparedPage, setSelectedPreparedPage] = useState(0);
+  const [debugOpen, setDebugOpen] = useState(true);
   const [isNarrow, setIsNarrow] = useState<boolean>(() => {
     if (typeof window === "undefined") return false;
     return window.innerWidth < 980;
@@ -83,6 +84,10 @@ export default function UploadView({
   );
 
   const hasPreparedPdf = preparedPages.length > 0;
+  const isExecuteDisabled =
+    isLoading ||
+    !hasPreparedPdf ||
+    (isAzureCu && (!selectedCuHeaderAnalyzerId || !selectedCuContentsAnalyzerId));
 
   useEffect(() => {
     if (selectedPreparedPage >= preparedPages.length) {
@@ -135,11 +140,21 @@ export default function UploadView({
         </div>
         <div style={styles.topBarActions}>
           <button
-            style={{ ...styles.btnPrimary, ...(isExecuting ? styles.btnBusy : {}) }}
+            style={{
+              ...styles.btnPrimary,
+              ...(isExecuting ? styles.btnBusy : {}),
+              ...(isExecuteDisabled ? styles.btnDisabled : {}),
+            }}
             type="button"
-            disabled={isLoading || !hasPreparedPdf}
+            disabled={isExecuteDisabled}
             onClick={onExecute}
-            title={hasPreparedPdf ? "現在の設定で解析を実行" : "先にPDFを読み込んでください"}
+            title={
+              !hasPreparedPdf
+                ? "先にPDFを読み込んでください"
+                : isAzureCu && (!selectedCuHeaderAnalyzerId || !selectedCuContentsAnalyzerId)
+                  ? "ヘッダ用・切り出し候補用のAnalyzerを選択してください"
+                  : "現在の設定で解析を実行"
+            }
           >
             {isExecuting ? "解析実行中..." : "解析を実行"}
           </button>
@@ -249,23 +264,6 @@ export default function UploadView({
           <h2 style={styles.cardTitle}>設定</h2>
 
           <div style={styles.formRow}>
-            <label htmlFor="engineSelect" style={styles.label}>切り出し方式</label>
-            <select
-              id="engineSelect"
-              value={selectedEngine}
-              onChange={(e) => onEngineChange(e.target.value as EngineName)}
-              style={styles.select}
-              disabled={isLoading}
-            >
-              {ENGINE_OPTIONS.map((opt) => (
-                <option key={opt.value} value={opt.value}>
-                  {opt.label}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div style={styles.formRow}>
             <label htmlFor="titlePositionSelect" style={styles.label}>タイトル位置</label>
             <select
               id="titlePositionSelect"
@@ -299,84 +297,95 @@ export default function UploadView({
             </select>
           </div>
 
-          <div style={{ ...styles.formRow, ...(isAzureCu ? {} : styles.rowDisabled) }}>
-            <label htmlFor="cuHeaderAnalyzer" style={styles.label}>ヘッダ用Analyzer</label>
-            <select
-              id="cuHeaderAnalyzer"
-              value={selectedCuHeaderAnalyzerId}
-              onChange={(e) => handleHeaderAnalyzerSelect(e.target.value)}
-              style={styles.select}
-              disabled={isLoading || !isAzureCu || headerAnalyzerOptions.length === 0}
-            >
-              <option value="">(未選択)</option>
-              {headerAnalyzerOptions.map((opt) => (
-                <option key={`${opt.analyzer_id}:${opt.api_version}`} value={opt.analyzer_id}>
-                  {opt.analyzer_id} ({opt.status})
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div style={{ ...styles.formRow, ...(isAzureCu ? {} : styles.rowDisabled) }}>
-            <label htmlFor="cuHeaderApiVersion" style={styles.label}>ヘッダ用 API Version</label>
-            <input
-              id="cuHeaderApiVersion"
-              value={selectedCuHeaderApiVersion}
-              onChange={(e) => onCuHeaderApiVersionChange(e.target.value)}
-              style={styles.input}
-              disabled={isLoading || !isAzureCu}
-              placeholder="2025-05-01-preview"
-            />
-          </div>
-
-          <div style={styles.formRow}>
-            <label htmlFor="cuContentsAnalyzer" style={styles.label}>切り出し候補用Analyzer</label>
-            <select
-              id="cuContentsAnalyzer"
-              value={selectedCuContentsAnalyzerId}
-              onChange={(e) => handleContentsAnalyzerSelect(e.target.value)}
-              style={styles.select}
-              disabled={isLoading || !isAzureCu || contentsAnalyzerOptions.length === 0}
-            >
-              <option value="">(未選択)</option>
-              {contentsAnalyzerOptions.map((opt) => (
-                <option key={`${opt.analyzer_id}:${opt.api_version}`} value={opt.analyzer_id}>
-                  {opt.analyzer_id} ({opt.status})
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div style={{ ...styles.formRow, ...(isAzureCu ? {} : styles.rowDisabled) }}>
-            <label htmlFor="cuContentsApiVersion" style={styles.label}>切り出し候補用 API Version</label>
-            <input
-              id="cuContentsApiVersion"
-              value={selectedCuContentsApiVersion}
-              onChange={(e) => onCuContentsApiVersionChange(e.target.value)}
-              style={styles.input}
-              disabled={isLoading || !isAzureCu}
-              placeholder="2025-05-01-preview"
-            />
-          </div>
-
-          <div style={styles.actionsRow}>
+          {/* デバッグ設定（アコーディオン） */}
+          <div style={styles.debugSection}>
             <button
-              style={styles.btnSecondary}
-              onClick={onFetchAnalyzers}
-              disabled={isLoading || isLoadingAnalyzers || !isAzureCu}
               type="button"
+              style={styles.debugToggle}
+              onClick={() => setDebugOpen((v) => !v)}
             >
-              {isLoadingAnalyzers ? "取得中..." : "Analyzer一覧を取得"}
+              <span style={styles.debugToggleArrow}>{debugOpen ? "▼" : "▶"}</span>
+              デバッグ設定
             </button>
-            <span style={styles.metaText}>
-              {analyzersFetchedAt
-                ? `最終取得: ${new Date(analyzersFetchedAt).toLocaleString("ja-JP")}`
-                : "未取得"}
-            </span>
-          </div>
 
-          <div style={{ ...styles.actionsRow, marginTop: "0.8rem" }}>
-            <span style={styles.metaText}>{hasPreparedPdf ? "PDF読み込み済み" : "未読み込み"}</span>
+            {debugOpen && (
+              <div style={styles.debugBody}>
+                <div style={styles.formRow}>
+                  <label htmlFor="engineSelect" style={styles.label}>切り出し方式</label>
+                  <select
+                    id="engineSelect"
+                    value={selectedEngine}
+                    onChange={(e) => onEngineChange(e.target.value as EngineName)}
+                    style={styles.select}
+                    disabled={isLoading}
+                  >
+                    {ENGINE_OPTIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div style={{ ...styles.formRow, ...(isAzureCu ? {} : styles.rowDisabled) }}>
+                  <label htmlFor="cuHeaderAnalyzer" style={styles.label}>ヘッダ用Analyzer</label>
+                  <select
+                    id="cuHeaderAnalyzer"
+                    value={selectedCuHeaderAnalyzerId}
+                    onChange={(e) => handleHeaderAnalyzerSelect(e.target.value)}
+                    style={styles.select}
+                    disabled={isLoading || !isAzureCu || headerAnalyzerOptions.length === 0}
+                  >
+                    <option value="">(未選択)</option>
+                    {headerAnalyzerOptions.map((opt) => (
+                      <option key={`${opt.analyzer_id}:${opt.api_version}`} value={opt.analyzer_id}>
+                        {opt.analyzer_id} ({opt.status})
+                      </option>
+                    ))}
+                  </select>
+                  {selectedCuHeaderApiVersion && (
+                    <span style={styles.apiVersionText}>API Version: {selectedCuHeaderApiVersion}</span>
+                  )}
+                </div>
+
+                <div style={styles.formRow}>
+                  <label htmlFor="cuContentsAnalyzer" style={styles.label}>切り出し候補用Analyzer</label>
+                  <select
+                    id="cuContentsAnalyzer"
+                    value={selectedCuContentsAnalyzerId}
+                    onChange={(e) => handleContentsAnalyzerSelect(e.target.value)}
+                    style={styles.select}
+                    disabled={isLoading || !isAzureCu || contentsAnalyzerOptions.length === 0}
+                  >
+                    <option value="">(未選択)</option>
+                    {contentsAnalyzerOptions.map((opt) => (
+                      <option key={`${opt.analyzer_id}:${opt.api_version}`} value={opt.analyzer_id}>
+                        {opt.analyzer_id} ({opt.status})
+                      </option>
+                    ))}
+                  </select>
+                  {selectedCuContentsApiVersion && (
+                    <span style={styles.apiVersionText}>API Version: {selectedCuContentsApiVersion}</span>
+                  )}
+                </div>
+
+                <div style={{ ...styles.actionsRow, ...(isAzureCu ? {} : styles.rowDisabled) }}>
+                  <button
+                    style={styles.btnSecondary}
+                    onClick={onFetchAnalyzers}
+                    disabled={isLoading || isLoadingAnalyzers || !isAzureCu}
+                    type="button"
+                  >
+                    {isLoadingAnalyzers ? "取得中..." : "Analyzer一覧を取得"}
+                  </button>
+                  <span style={styles.metaText}>
+                    {analyzersFetchedAt
+                      ? `最終取得: ${new Date(analyzersFetchedAt).toLocaleString("ja-JP")}`
+                      : "未取得"}
+                  </span>
+                </div>
+              </div>
+            )}
           </div>
         </section>
       </div>
@@ -491,6 +500,10 @@ const styles: Record<string, React.CSSProperties> = {
   btnBusy: {
     opacity: 0.85,
   },
+  btnDisabled: {
+    opacity: 0.45,
+    cursor: "not-allowed",
+  },
   runningHint: {
     display: "inline-flex",
     alignItems: "center",
@@ -587,5 +600,36 @@ const styles: Record<string, React.CSSProperties> = {
     background: "#dbeafe",
     borderColor: "#93c5fd",
     color: "#1d4ed8",
+  },
+  debugSection: {
+    marginTop: "0.4rem",
+    borderTop: "1px solid #e5e7eb",
+    paddingTop: "0.6rem",
+  },
+  debugToggle: {
+    display: "flex",
+    alignItems: "center",
+    gap: "0.4rem",
+    background: "none",
+    border: "none",
+    padding: "0.2rem 0",
+    fontSize: "0.85rem",
+    fontWeight: 600,
+    color: "#6b7280",
+    cursor: "pointer",
+    width: "100%",
+    textAlign: "left",
+  },
+  debugToggleArrow: {
+    fontSize: "0.7rem",
+    color: "#9ca3af",
+  },
+  debugBody: {
+    marginTop: "0.75rem",
+  },
+  apiVersionText: {
+    fontSize: "0.75rem",
+    color: "#9ca3af",
+    marginTop: "0.15rem",
   },
 };

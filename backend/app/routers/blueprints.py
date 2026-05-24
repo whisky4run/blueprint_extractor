@@ -34,6 +34,18 @@ def _save_run_artifacts(session_id: str, page_images: list[Path], run) -> None:
     if run.parts:
         extractor.extract_parts(page_images, run.parts, parts_dir)
 
+    # 最終処理結果を JSON として保存（AzureCU 生 JSON との比較用）
+    result_payload = {
+        "engine": run.engine,
+        "executed_at": run.executed_at,
+        "parts": [p.model_dump() for p in run.parts],
+        "metrics": run.metrics.model_dump() if run.metrics else None,
+    }
+    (parts_dir / "result.json").write_text(
+        json.dumps(result_payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
     session.set_session_run(session_id, run)
     session.set_active_engine(session_id, run.engine)
 
