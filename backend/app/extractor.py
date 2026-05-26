@@ -16,26 +16,39 @@ def _safe_filename(title: str) -> str:
 
 def extract_parts(page_images: list[Path], parts: list[DetectedPart], out_dir: Path) -> list[Path]:
     """Crop each detected part from its page image and save as PNG."""
-    out_paths: list[Path] = []
+    # ページ → y → x 順でソートして連番割り当てを安定させる
+    sorted_parts = sorted(parts, key=lambda p: (p.page, p.bbox.y, p.bbox.x))
 
-    for part in parts:
+    # 同一ベース名の出現数を事前カウント
+    name_counts: dict[str, int] = {}
+    for part in sorted_parts:
+        base = _safe_filename(part.title)
+        name_counts[base] = name_counts.get(base, 0) + 1
+
+    # 連番カウンタ（重複名にのみ使用）
+    name_seq: dict[str, int] = {}
+
+    out_paths: list[Path] = []
+    for part in sorted_parts:
         src = page_images[part.page]
         img = Image.open(src)
         bb = part.bbox
 
-        left = int(bb.x)
-        upper = int(bb.y)
-        right = int(bb.x + bb.w)
-        lower = int(bb.y + bb.h)
-
-        # Clamp to image bounds
-        left = max(0, left)
-        upper = max(0, upper)
-        right = min(img.width, right)
-        lower = min(img.height, lower)
+        left = max(0, int(bb.x))
+        upper = max(0, int(bb.y))
+        right = min(img.width, int(bb.x + bb.w))
+        lower = min(img.height, int(bb.y + bb.h))
 
         cropped = img.crop((left, upper, right, lower))
-        filename = _safe_filename(part.title) + ".png"
+
+        base = _safe_filename(part.title)
+        if name_counts[base] > 1:
+            # 重複がある場合は _1, _2, ... を付与
+            name_seq[base] = name_seq.get(base, 0) + 1
+            filename = f"{base}_{name_seq[base]}.png"
+        else:
+            filename = f"{base}.png"
+
         out_path = out_dir / filename
         cropped.save(str(out_path), format="PNG")
         out_paths.append(out_path)

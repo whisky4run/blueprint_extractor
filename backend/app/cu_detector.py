@@ -1048,6 +1048,171 @@ def _extract_header_fields_from_crop(payload: dict, crop: _PageCrop) -> list[Hea
     return items
 
 
+def _extract_scale_notations_from_payload(
+    payload: dict,
+    crop: _PageCrop,
+    scale_field_prefix: str = "縮尺表記_",
+    title_field_prefix: str = "タイトル_",
+) -> tuple[list[tuple[str, BoundingBox]], list[tuple[str, BoundingBox]]]:
+    """
+    AzureCU payload から縮尺表記フィールドとタイトルフィールドを個別に抽出する。
+
+    インデックス対応（縮尺表記_01 ↔ タイトル_01）は行わず、それぞれ独立して返す。
+    セル対応は呼び出し側（_detect_parts_from_scale_notations）で OpenCV セルを使って行う。
+
+    Returns:
+        (scale_notations, title_notations)
+        scale_notations : list of (scale_text, full_page_bbox)
+        title_notations : list of (title_text, full_page_bbox)
+        bbox はクロップオフセットを加算したフルページ座標。
+    """
+    result = payload.get("result", {})
+    page_size_map = _extract_page_size_map(payload)
+
+    with Image.open(crop.image_path) as img:
+        crop_w_px, crop_h_px = img.width, img.height
+
+    # フィールド辞書を収集（contents 配下 / result.fields 両方に対応）
+    all_fields: dict[str, object] = {}
+    fields_root = result.get("fields")
+    if isinstance(fields_root, dict):
+        all_fields.update(fields_root)
+    contents = result.get("contents")
+    if isinstance(contents, list):
+        for content in contents:
+            if not isinstance(content, dict):
+                continue
+            cf = content.get("fields")
+            if isinstance(cf, dict):
+                all_fields.update(cf)
+
+    def _resolve_bbox(field: object) -> BoundingBox | None:
+        if not isinstance(field, dict):
+            return None
+        source = _field_to_string(field.get("source")) or None
+        if not source:
+            return None
+        source_parsed = _parse_source(source)
+        if not source_parsed:
+            return None
+        page_num = source_parsed[0]
+        source_page_w, source_page_h = None, None
+        dims = page_size_map.get(page_num)
+        if dims:
+            source_page_w, source_page_h = dims
+        parsed = _bbox_from_source(
+            source, crop_w_px, crop_h_px,
+            source_page_w=source_page_w,
+            source_page_h=source_page_h,
+        )
+        if not parsed:
+            return None
+        _, src_bbox = parsed
+        return _offset_bbox(src_bbox, crop)
+
+    scale_notations: list[tuple[str, BoundingBox]] = []
+    title_notations: list[tuple[str, BoundingBox]] = []
+
+    for key, field in all_fields.items():
+        if not isinstance(key, str):
+            continue
+        if key.startswith(scale_field_prefix):
+            text = _field_value_to_string(field)
+            if not text:
+                continue
+            bbox = _resolve_bbox(field)
+            if bbox and bbox.w > 0 and bbox.h > 0:
+                scale_notations.append((text, bbox))
+        elif key.startswith(title_field_prefix):
+            text = _field_value_to_string(field)
+            if not text:
+                continue
+            bbox = _resolve_bbox(field)
+            if bbox and bbox.w > 0 and bbox.h > 0:
+                title_notations.append((text, bbox))
+
+    return scale_notations, title_notations
+
+
+def _detect_parts_from_scale_notations(
+    scale_notations: list[tuple[str, BoundingBox]],
+    title_notations: list[tuple[str, BoundingBox]],
+    page_image: Path,
+    page_idx: int,
+    title_position: TitlePosition,
+) -> list[DetectedPart]:
+    """
+    縮尺表記・タイトルの位置アンカーから OpenCV グリッドを使ってパーツBBoxを導出する。
+
+    アルゴリズム:
+    1. 縮尺表記・タイトルそれぞれの bbox が含まれる OpenCV セルを特定。
+    2. セルベースで対応付け:
+       - 同一セルに縮尺表記とタイトルが両方ある → タイトルを採用
+       - 縮尺表記のみのセル → 縮尺表記テキストをタイトルとして使用
+       - タイトルのみのセル（縮尺表記が検出されなかった孤立タイトル）→ タイトルをアンカーとして使用
+    3. 全アンカーセルから title_position 逆方向へグリッドを辿り、
+       別のアンカーセルに到達したら停止してパーツBBoxを生成。
+    """
+    if not scale_notations and not title_notations:
+        return []
+
+    cells = detect_all_cells(page_image)
+    if not cells:
+        return []
+
+    growth_dir: dict[TitlePosition, str] = {
+        "top": "down",
+        "bottom": "up",
+        "left": "right",
+        "right": "left",
+    }
+    direction = growth_dir[title_position]
+    tol = 6.0
+
+    # セルインデックス → scale_text（最初の1件）
+    scale_cell_map: dict[int, str] = {}
+    for scale_text, bbox in scale_notations:
+        cell_idx = _find_title_cell_index(cells, bbox)
+        if cell_idx is not None and cell_idx not in scale_cell_map:
+            scale_cell_map[cell_idx] = scale_text
+
+    # セルインデックス → title_text（最初の1件）
+    title_cell_map: dict[int, str] = {}
+    for title_text, bbox in title_notations:
+        cell_idx = _find_title_cell_index(cells, bbox)
+        if cell_idx is not None and cell_idx not in title_cell_map:
+            title_cell_map[cell_idx] = title_text
+
+    # アンカーセル = 縮尺表記セル ∪ タイトルセル
+    all_anchor_indices = set(scale_cell_map.keys()) | set(title_cell_map.keys())
+    if not all_anchor_indices:
+        return []
+
+    parts: list[DetectedPart] = []
+    for start_idx in all_anchor_indices:
+        # タイトル優先、なければ縮尺表記テキスト
+        resolved_title = title_cell_map.get(start_idx) or scale_cell_map.get(start_idx, "?")
+
+        visited = {start_idx}
+        chain = [start_idx]
+        current_idx = start_idx
+
+        while True:
+            nxt = _next_cell_index(cells, current_idx, start_idx, direction, tol)
+            if nxt is None or nxt in visited:
+                break
+            if nxt in all_anchor_indices:
+                break
+            visited.add(nxt)
+            chain.append(nxt)
+            current_idx = nxt
+
+        merged = _merge_cell_bboxes([cells[i] for i in chain])
+        parts.append(DetectedPart(title=resolved_title, bbox=merged, page=page_idx))
+
+    return parts
+
+
 def detect_parts_from_pdf(
     pdf_path: Path,
     page_images: list[Path],
@@ -1076,10 +1241,37 @@ def detect_parts_from_pdf(
         content_analyses.append((crop, payload))
     _write_analysis_artifact(raw_output_path, "contents", content_analyses)
 
-    detected_parts: list[DetectedPart] = []
+    scale_field_prefix = os.environ.get("AZURE_CU_SCALE_FIELD_PREFIX", "縮尺表記_")
+    title_field_prefix = os.environ.get("AZURE_CU_TITLE_FIELD_PREFIX", "タイトル_")
+
+    # 縮尺アンカー方式で確定済みのパーツ（_expand_parts_by_grid 不要）
+    scale_anchor_parts: list[DetectedPart] = []
+    # 従来方式のパーツ（_expand_parts_by_grid でタイトルセルから展開が必要）
+    traditional_parts: list[DetectedPart] = []
     seen: set[tuple] = set()
 
     for crop, payload in content_analyses:
+        # --- 縮尺表記フィールドが存在すれば縮尺アンカー方式を使用 ---
+        scale_notations, title_notations = _extract_scale_notations_from_payload(
+            payload, crop,
+            scale_field_prefix=scale_field_prefix,
+            title_field_prefix=title_field_prefix,
+        )
+        if scale_notations or title_notations:
+            for part in _detect_parts_from_scale_notations(
+                scale_notations,
+                title_notations,
+                page_image=page_images[crop.page_idx],
+                page_idx=crop.page_idx,
+                title_position=title_position,
+            ):
+                key = (part.title, part.page, round(part.bbox.x, 1), round(part.bbox.y, 1))
+                if key not in seen:
+                    seen.add(key)
+                    scale_anchor_parts.append(part)
+            continue  # 縮尺アンカー方式で処理済み → 従来ロジックはスキップ
+
+        # --- 縮尺表記フィールドなし → 従来の parts.title 方式 ---
         page_size_map = _extract_page_size_map(payload)
         rows = _extract_rows(payload)
 
@@ -1138,9 +1330,13 @@ def detect_parts_from_pdf(
                 continue
             seen.add(key)
 
-            detected_parts.append(DetectedPart(title=title, bbox=bbox, page=page_idx))
+            traditional_parts.append(DetectedPart(title=title, bbox=bbox, page=page_idx))
 
-    expanded = _expand_parts_by_grid(page_images, detected_parts, title_position=title_position)
+    # 従来方式のパーツのみ _expand_parts_by_grid でタイトルセルから展開
+    # 縮尺アンカー方式は既にOpenCVグリッド展開済みなので適用しない
+    expanded_traditional = _expand_parts_by_grid(page_images, traditional_parts, title_position=title_position)
+    detected_parts = scale_anchor_parts + expanded_traditional
+    expanded = detected_parts
     kept_parts, header_items = _split_header_items(page_images, expanded, header_position=header_position)
 
     header_field_items: list[HeaderFieldItem] = []
